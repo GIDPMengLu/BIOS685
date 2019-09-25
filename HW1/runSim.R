@@ -21,8 +21,22 @@ estMeanPrimes = function (x) {
   return (mean(x[ind]))
 }
 
-# simulate data
-x = rnorm(n)
+Sample.MSE <- function(seed, n, dist, rep){
+  set.seed(seed)
+  if (dist == "gaussian") {
+    x <- replicate(rep, rnorm(n, 0, 1))
+  }
+  if (dist == "t1") {
+    x <- replicate(rep, rt(n, 1))
+  }
+  if (dist == "t5") {
+    x <- replicate(rep, rt(n, df = 5))
+  }
+  PrimeAvg <- apply(x, 2, estMeanPrimes)
+  SampAvg <- apply(x, 2, mean)
+  PrimeMSE <- mean((PrimeAvg)^2)
+  SampMSE <- mean((SampAvg)^2)
+  return(data.frame(PrimeAvg = PrimeMSE, SampAvg = SampMSE))
+}
 
-# estimate mean
-estMeanPrimes(x)
+
