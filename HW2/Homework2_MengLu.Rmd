@@ -1,0 +1,368 @@
+---
+title: "Homework 2 Web Mining and Interactive Documents With shiny"
+subtitle: Healthcare Data Science (BIOS 685)
+author: "Meng Lu"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = FALSE)
+require(tidyverse)
+require(rvest)
+require(xml2)
+require(ggrepel)
+```
+
+# Web Scraping and Shiny App
+
+[indeed.com](https://www.indeed.com/) is the largest US online job board, with a google-like interface and search engine, you can drill down with an advanced search where you can put in your search criteria. Search jobs with title that contains “Data Scientist” (this will include senior, junior or other possible prefix/suffix). You can set location equals to top biggest cities in US https://en.wikipedia.org/wiki/List_of_United_States_cities_by_population, and Exclude staffing agencies checked to remove potential duplicates. Additionally select display 50 listings per page sorted by date. Make a Shiny app to facilitate exploratory data analysis to answer following questions (pick at least three functions to show on your shiny app):  
+
+1. For efficiency of the Shiny app, you should first pre-process, pare down, tidy, and save the data, e.g., as a compressed RDS file, to be used in the app and mark data scraped by date.
+
+2. Which city contains most jobs for “Data Scientist”.
+
+3. What are the skill sets required from your search? Whether it varies across cities?
+
+4. Which companies have been reviewed the most and also had highest review score? Can you make user to choose which city (or average over city)?
+
+5. What are salary range for “Data Scientist”? Whether it varies across cities?
+
+6. What are the elements,e.g., degree, skill sets, experiences, etc., that contribute to high salary for entry level jobs?
+
+7. Visualize any other information you are interested in.
+
+8. Publish your Shiny app to https://www.shinyapps.io and share the link.
+
+
+## Grab Web Information
+
+We used *rvest* package to grab the data from the indeed website and save the data as RDS file. 
+
+```{r Data Collecting, eval = FALSE}
+page_result_end <- 950 # last page results
+page_result_start = 50
+page_results <- seq(from = page_result_start, to = page_result_end, by = 50)
+ 
+full_df <- data.frame()
+for(i in seq_along(page_results)) {
+  first_page_url <- "https://www.indeed.com/jobs?q=Data+Scientist&sort=date&limit=50&radius=25"
+  url <- paste0(first_page_url, "&start=", page_results[i])
+  page <- xml2::read_html(url)
+  # Sys.sleep pauses R for two seconds before it resumes
+  # Putting it there avoids error messages such as "Error in open.connection(con, "rb") : Timeout was reached"
+  Sys.sleep(10)
+  
+  #get the job title
+  job_title <- page %>% 
+    rvest::html_nodes("div") %>%
+    rvest::html_nodes(xpath = '//*[contains(concat( " ", @class, " " ), concat( " ", "title", " " ))]')  %>%
+    rvest::html_text() %>%
+    stringi::stri_trim_both()
+  #get the company name
+  company_name <- page %>% 
+    rvest::html_nodes("span")  %>% 
+    rvest::html_nodes(xpath = '//*[@class="company"]')  %>% 
+    rvest::html_text() %>%
+    stringi::stri_trim_both() 
+  #get job location
+  job_location <- page %>% 
+  rvest::html_nodes(".location") %>%
+  rvest::html_text()
+  # get links
+  links <- page %>% 
+    rvest::html_nodes("div") %>%
+    rvest::html_nodes(xpath = '//*[@data-tn-element="jobTitle"]') %>%
+    rvest::html_attr("href")
+  
+  Job_Description <- c()
+  job_rating <- c()
+  job_review <- c()
+  for(j in seq_along(links)) {
+    url <- paste0("https://indeed.com/", links[j])
+    page <- read_html(url)
+    # job rating
+    rating <- page %>% 
+      html_nodes(xpath = '//meta[@itemprop="ratingValue"]') %>%
+      html_attr('content')
+    job_rating[j] <- rating[1]
+    
+    # job review 
+    review <- page %>% 
+      html_nodes(xpath = '//meta[@itemprop="ratingCount"]') %>%
+      html_attr('content')
+    job_review[j] <- review[1]
+    
+    Job_Description[j] <- page %>%
+      rvest::html_nodes("div")  %>% 
+      rvest::html_nodes(xpath = '//*[@class="jobsearch-jobDescriptionText"]') %>% 
+      rvest::html_text() %>%
+      stringi::stri_trim_both()
+  }
+  Len <- min(length(job_title), 
+             length(company_name),
+             length(job_location), 
+             length(job_rating), 
+             length(job_review), 
+             length(Job_Description))
+  
+  df <- data.frame(Job_Title = job_title[1:Len], 
+                    Company_Name = company_name[1:Len], 
+                    Job_Location = job_location[1:Len], 
+                    Job_Rating = job_rating[1:Len], 
+                    Job_Reviews = job_review[1:Len], 
+                    Job_Description = Job_Description[1:Len])
+  full_df <- rbind(full_df, df)
+}
+saveRDS(full_df, file = "/Users/mlu/Courses/BIOS685/Homework/HW2/Indeed_Jobs.rds")
+```
+
+After that, we did some data cleaning of the raw data. 
+
+```{r Data Cleanning}
+Jobs <- readRDS(file = "Indeed_Jobs.rds")
+Jobs <- Jobs %>% 
+  distinct() %>% 
+  mutate(city = str_split(as.character(Job_Location), ",", simplify = TRUE)[, 1], 
+         state = str_split(as.character(Job_Location), ",", simplify = TRUE)[, 2], 
+         Job_Description = gsub("[\r\n]", "", Job_Description))
+
+```
+
+## Which city contains most jobs for "Data Scientist"
+
+```{r, results = "hide"}
+Jobs %>% 
+  count(city, sort = TRUE) %>%
+  mutate(city = fct_reorder(city, n)) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  ggplot(aes(x = city, y = n, fill = city)) + 
+  geom_bar(stat = "identity") +
+  labs(x = "Top 10 Cities", y = "Count") + 
+  coord_flip()
+```
+
+### Visualize the Jobs by Cities using Shiny Interactive App
+
+```{r}
+ui <- fluidPage(
+  sliderInput('Cities', 'Number of Top Cities', 10, 50, c(10, 20)),
+  plotOutput("barplot")
+)
+
+
+server <- function(input, output) {
+  dateRangeInput<-reactive({
+  dataset <- Jobs %>% 
+    count(city) %>%
+    mutate(city = fct_reorder(city, n)) %>%
+    top_n(input$Cities) %>%
+    ungroup()
+  return(dataset)
+  })
+  output$barplot <-renderPlot({
+    ggplot(data=dateRangeInput(), aes(x=city, y=n, fill = city)) + 
+      geom_bar(stat="identity") + 
+      labs(x = paste0("Top ", input$Cities, " Cities"), y = "Count") + 
+      coord_flip() +
+      theme(plot.title = element_text(hjust = 0.5), 
+            legend.position = "none")        
+    })        
+}
+
+shinyApp (ui = ui, server = server)
+```
+
+
+
+From the bar plot, we see the New York city contains the most **Data Scientist** jobs
+
+## What are the skill sets required from your search? Whether it varies across cities?
+
+```{r}
+skill_set <- Jobs %>%
+  dplyr::mutate(R = grepl("\\bR\\b", Job_Description)) %>%
+  dplyr::mutate(Python = grepl("Python", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(SQL = grepl("SQL", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(SAS = grepl("SAS", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(Hadoop = grepl("hadoop", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(Perl = grepl("perl", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(`C++` = grepl("C++", Job_Description, fixed=TRUE)) %>%
+  dplyr::mutate(Java = grepl("java\\b", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(Scala = grepl("scala", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(Tensorflow = grepl("tensorflow", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(Javascript = grepl("javascript", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(Spark = grepl("spark", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(VC = grepl("Git.*|Version Control|Bitbucket", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(Terminal = grepl("command line|bash|terminal|shell|command-line", Job_Description, ignore.case=TRUE)) %>%
+  dplyr::mutate(Excel = grepl("\\<Excel\\>", Job_Description)) %>%
+  dplyr::mutate(Tableau = grepl("Tableau", Job_Description, ignore.case = TRUE)) %>%
+  dplyr::mutate(Julia = grepl("Julia", Job_Description, ignore.case = TRUE))
+
+skill_set[, -c(1:8)] %>%
+  purrr::map_dbl(sum) %>%
+  dplyr::tibble(skill = as.factor(names(.)), count = .) %>%
+  dplyr::arrange(desc(count)) -> skill_count
+ggplot(skill_count, aes(x = reorder(skill, count), y = count)) + 
+  geom_bar(stat = 'identity', fill = "darkblue") + 
+  geom_text(stat = "identity", aes(label = count), hjust = 1.2, col = "white") +
+  coord_flip() + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  xlab('Skill') + 
+  ylab('Frequency') + 
+  labs(title = 'Data Science Skill Set')
+
+skill_set <- skill_set[, c(7, 9:25)] %>%
+  gather(Skills, Value, -city) %>%
+  group_by(city, Skills) %>%
+  filter(Value == TRUE) %>%
+  count() %>%
+  ungroup()
+
+```
+
+### Visualize the Skills Set by Cities using Shiny Interactive App
+
+```{r}
+ui <- fluidPage(
+  selectInput(inputId = 'City',
+  label='City',
+  choices=skill_set$city,
+  selected='New York'),
+  plotOutput("barplot")
+)
+
+
+server <- function(input, output) {
+  dateRangeInput<-reactive({
+  dataset <- subset(skill_set, city == input$City) %>%
+    mutate(Skills = fct_reorder(Skills, n))
+    
+  return(dataset)
+  })
+  output$barplot <-renderPlot({
+    ggplot(data=dateRangeInput(), aes(x=Skills, y=n, fill = Skills)) + 
+      geom_bar(stat="identity") + 
+      
+      coord_flip() + 
+      labs(title=input$City, y ="Count") +
+      theme(plot.title = element_text(hjust = 0.5))        
+    })        
+}
+
+shinyApp (ui = ui, server = server)
+```
+
+## Which companies have been reviewed the most and also had highest review score?
+
+```{r}
+Reviewers <- Jobs %>%
+  select(city, Company_Name, Job_Rating, Job_Reviews) %>%
+  filter(complete.cases(.)) %>%
+  distinct() %>%
+  mutate(Job_Rating = as.numeric(as.character(Job_Rating)),
+         Job_Reviews = as.numeric(as.character(Job_Reviews))) %>%
+  arrange(desc(Job_Reviews), desc(Job_Rating))
+
+Company <- Reviewers %>%
+  filter(Job_Reviews == max(Job_Reviews) | Job_Rating == max(Job_Rating))
+
+ggplot(Reviewers, aes(x = Job_Rating, y = Job_Reviews)) + 
+  geom_point() +
+  geom_text_repel(Company, mapping = aes(x = Job_Rating, y = Job_Reviews, label = Company_Name), color = "red")
+```
+
+### Visualize the Rating Score and the Number of Reviewers by City
+
+```{r}
+ui <- fluidPage(
+  selectInput(inputId = 'City',
+  label='City',
+  choices=Reviewers$city,
+  selected='New York'),
+  plotOutput("scatterplot")
+)
+
+
+server <- function(input, output) {
+  dateRangeInput<-reactive({
+  dataset <- subset(Reviewers, city == input$City) 
+  return(dataset)
+  })
+  output$scatterplot <-renderPlot({
+    ggplot(data=dateRangeInput(), aes(x = Job_Rating, y = Job_Reviews)) + 
+      geom_point() +
+      geom_text_repel(dateRangeInput() %>%
+                        filter(Job_Reviews == max(Job_Reviews) | Job_Rating == max(Job_Rating)), 
+                      mapping = aes(x = Job_Rating, y = Job_Reviews, 
+                                    label = Company_Name), color = "red") + 
+      labs(title=input$City, y ="Count") +
+      theme(plot.title = element_text(hjust = 0.5))        
+    })        
+}
+
+shinyApp (ui = ui, server = server)
+```
+
+## What are salary range for “Data Scientist”? Whether it varies across cities?
+
+```{r}
+Dollor_Location <- str_locate(tolower(Jobs$Job_Description), "\\$")
+Index <- which(!is.na(Dollor_Location[, 1]))
+Job_Salary <- Jobs[Index, ]
+Salary_Location <- str_locate(tolower(Job_Salary$Job_Description), "salary")
+Index <- which(!is.na(Salary_Location[, 1]))
+Job_Salary <- Job_Salary[Index, ]
+Lower_Salary <- c(110231, 60, 115000, 65000, 20000, 100000, 68, 60, 25, 35000, 100000, 12, 
+                  70000, 21.59, 60, 40, 100000, 100000, 74988, 1500000, 110231, 110231, 0, 0,
+                  90000, 0, 0, 90000, 115000, 150000, 80, 800000, 0, 50, 88704, 93282, 93282, 
+                  90000, 56888, 60, 70000, 75000, 70000, 80000, 90000, 93282, 165372)
+Upper_Salary <- c(143304, 75, 125000, 90000, 80000, 200000, 75, 75, 35, 75000, 116000, 15, 
+                  850000, 21.59, 75, 55, 225000, 200000, 145200, 250000, 143304, 143304, 0, 0, 
+                  120000, 0, 0, 125000, 135000, 200000, 90, 120000, 0, 60, 115313, 121264, 121264,
+                  170000, 77937.6, 80, 70000, 80000, 100000, 140000, 160000, 121264, 239784)
+Job_Salary$Lower_Salary <- Lower_Salary
+Job_Salary$Upper_Salary <- Upper_Salary
+Job_Salary <- Job_Salary %>%
+  select(city, Lower_Salary, Upper_Salary) %>%
+  distinct() %>%
+  filter(Lower_Salary != 0) %>%
+  mutate(Type = ifelse(Lower_Salary < 100, "Hourly", "Yearly")) %>%
+  group_by(city, Type) %>%
+  summarise_all(mean)
+```
+
+```{r}
+ui <- fluidPage(
+  sidebarLayout(
+    sidebarPanel(
+      radioButtons("typeInput", "Salary Type",
+                  choices = c("Hourly", "Yearly"),
+                  selected = "Hourly"),
+      selectInput("cityInput", "City",
+                  choices = Job_Salary$city)
+    ),
+    mainPanel(
+      tableOutput("results")
+    )
+  )
+)
+
+server <- function(input, output) {
+  output$results <- renderTable({
+    filtered <- Job_Salary %>%
+      filter(Type == input$typeInput,
+             city == input$cityInput)
+    filtered
+  }
+  )
+}
+
+shinyApp(ui = ui, server = server)
+```
+
