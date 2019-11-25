@@ -1,0 +1,520 @@
+---
+title: "BIOS/CPH685 Homework 3"
+subtitle: Due Nov 27 @ 11:59PM
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Learn by doing
+
+I found the [TensorFlow for R Blog](https://blogs.rstudio.com/tensorflow/) series at RStudio quite illuminating. Choose one blog related with deep learning architeture that interests you and do following.  
+
+# Question 1
+Reproduce the results in the blog and write a tutorial as a `Rmd` and `html` file to report your results.  
+
+
+
+## Modeling censored data with tfprobability (July 30, 2019)
+
+You may click the web link[https://blogs.rstudio.com/tensorflow/posts/2019-07-31-censored-data/] to see the details. 
+
+In this section, I will reproduce this task.  
+In this post we use tfprobability, the R interface to TensorFlow Probability, to model censored data. Again, the exposition is inspired by the treatment of this topic in Richard McElreath’s Statistical Rethinking. Instead of cute cats though, we model immaterial entities from the cold world of technology: This post explores durations of CRAN package checks, a dataset that comes with Max Kuhn’s parsnip.  
+
+The following code works with the current stable releases of TensorFlow and TensorFlow Probability, which are 1.14 and 0.7, respectively. If you don’t have tfprobability installed, get it from Github:  
+
+**However, Before you install tfprobability package, you need to update tensorflow package to 2.0.0, because, tfprobability package need at least 2.0.0 version of tensorflow.**  
+
+```{r, eval = FALSE}
+require(remotes)
+remotes::install_github("rstudio/tfprobability")
+```
+
+```{r, message = FALSE, warning = FALSE}
+library(keras)
+use_implementation("tensorflow")
+library(tensorflow)
+library(tfprobability)
+library(parsnip)
+library(tidyverse)
+library(zeallot)
+library(gridExtra)
+library(HDInterval)
+library(tidymodels)
+library(survival)
+library(kableExtra)
+library(xtable)
+```
+
+In this blog, the original R code is *\text{tf$compat$v2$enable_v2_behavior()}*, but it said *v2* cannot be found, so I changed *v2* to *v1*. Fortunately, the *\text{tf$compat$v1$enable_v2_behavior()}* can be run.  
+
+```{r Running eager exection}
+tf$compat$v1$enable_v2_behavior()
+```
+
+Besides the check durations we want to model, check_times reports various features of the package in question, such as number of imported packages, number of dependencies, size of code and documentation files, etc. The status variable indicates whether the check completed or errored out.  
+
+```{r Loading Required Data}
+df <- check_times %>% select(-package)
+glimpse(df)
+```
+
+Of these 13,626 observations, just 103 are censored:  
+
+```{r}
+table(df$status)
+```
+
+For better readability, we’ll work with a subset of the columns. We use surv_reg to help us find a useful and interesting subset of predictors:  
+
+When I run the code below, It said *engine 'survreg' is not availble. Please use one of: 'flexsurv', 'survival'*.  
+
+```{r, eval = FALSE}
+survreg_fit <-
+  surv_reg(dist = "exponential") %>% 
+  set_engine("survreg") %>% 
+  fit(Surv(check_time, status) ~ ., 
+      data = df)
+tidy(survreg_fit)
+```
+
+So I changed *survreg* to *survival*. The results are the same.  
+
+```{r, eval = FALSE}
+survreg_fit <-
+  surv_reg(dist = "exponential") %>% 
+  set_engine("survival") %>% 
+  fit(Surv(check_time, status) ~ ., 
+      data = df)
+tidy(survreg_fit)
+```
+
+It seems that if we choose imports, depends, r_size, doc_size, ns_import and ns_export we end up with a mix of (comparatively) powerful predictors from different semantic spaces and of different scales.  
+
+Before pruning the dataframe, we save away the target variable. In our model and training setup, it is convenient to have censored and uncensored data stored separately, so here we create two target matrices instead of one:  
+
+```{r}
+# check times for failed checks
+# _c stands for censored
+check_time_c <- df %>%
+  filter(status == 0) %>%
+  select(check_time) %>%
+  as.matrix()
+
+# check times for successful checks 
+check_time_nc <- df %>%
+  filter(status == 1) %>%
+  select(check_time) %>%
+  as.matrix()
+```
+
+Now we can zoom in on the variables of interest, setting up one dataframe for the censored data and one for the uncensored data each. All predictors are normalized to avoid overflow during sampling. 1 We add a column of 1s for use as an intercept.  
+
+```{r}
+df1 <- df %>% select(status,
+                    depends,
+                    imports,
+                    doc_size,
+                    r_size,
+                    ns_import,
+                    ns_export) %>%
+  mutate_at(.vars = 2:7, .funs = function(x) (x - min(x))/(max(x)-min(x))) %>%
+  add_column(intercept = rep(1, nrow(df)), .before = 1)
+
+# dataframe of predictors for censored data  
+df_c <- df1 %>% filter(status == 0) %>% select(-status)
+# dataframe of predictors for non-censored data 
+df_nc <- df1 %>% filter(status == 1) %>% select(-status)
+```
+
+### The results
+
+#### check time
+
+```{r}
+ct_c <- round(quantile(check_time_c, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+ct_nc <- round(quantile(check_time_nc, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+res_ct <- data.frame(Completed = ct_c, Not_Completed = ct_nc)
+
+kable(t(res_ct), booktabs=TRUE) %>% 
+  kable_styling(position = "center")
+```
+
+Here and in the following tables, we report the unnormalized, original values as contained in check_times.  
+
+```{r}
+df_unnormalized <- df %>% select(status,
+                    depends,
+                    imports,
+                    doc_size,
+                    r_size,
+                    ns_import,
+                    ns_export)
+# dataframe of predictors for censored data  
+df_c_unnormalized <- df_unnormalized %>% filter(status == 0) %>% select(-status)
+# dataframe of predictors for non-censored data 
+df_nc_unnormalized <- df_unnormalized %>% filter(status == 1) %>% select(-status)
+```
+
+#### depends
+
+```{r}
+depends_c <- round(quantile(df_c_unnormalized$depends, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+depends_nc <- round(quantile(df_nc_unnormalized$depends, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+res_depends <- data.frame(Completed = depends_c, Not_Completed = depends_nc)
+
+kable(t(res_depends), booktabs=TRUE) %>% 
+  kable_styling(position = "center")
+```
+
+#### imports
+
+```{r}
+imports_c <- round(quantile(df_c_unnormalized$imports, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+imports_nc <- round(quantile(df_nc_unnormalized$imports, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+res_imports <- data.frame(Completed = imports_c, Not_Completed = imports_nc)
+
+kable(t(res_imports), booktabs=TRUE) %>% 
+  kable_styling(position = "center")
+```
+
+#### ns_export
+
+```{r}
+ns_export_c <- round(quantile(df_c_unnormalized$ns_export, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+ns_export_nc <- round(quantile(df_nc_unnormalized$ns_export, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+res_ns_export <- data.frame(Completed = ns_export_c, 
+                            Not_Completed = ns_export_nc)
+
+kable(t(res_ns_export), booktabs=TRUE) %>% 
+  kable_styling(position = "center")
+```
+
+#### ns_import
+
+```{r}
+ns_import_c <- round(quantile(df_c_unnormalized$ns_import, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+ns_import_nc <- round(quantile(df_nc_unnormalized$ns_import, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+res_ns_import <- data.frame(Completed = ns_import_c, 
+                            Not_Completed = ns_import_nc)
+
+kable(t(res_ns_import), booktabs=TRUE) %>% 
+  kable_styling(position = "center")
+```
+
+#### r_size
+
+```{r}
+r_size_c <- round(quantile(df_c_unnormalized$r_size, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+r_size_nc <- round(quantile(df_nc_unnormalized$r_size, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+res_r_size <- data.frame(Completed = r_size_c, 
+                            Not_Completed = r_size_nc)
+
+kable(t(res_r_size), booktabs=TRUE) %>% 
+  kable_styling(position = "center")
+```
+
+#### doc_size
+
+```{r}
+doc_size_c <- round(quantile(df_c_unnormalized$doc_size, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+doc_size_nc <- round(quantile(df_nc_unnormalized$doc_size, 
+                       probs = c(0.1, 0.3, 0.5, 0.7, 0.9, 1.0)))
+res_doc_size <- data.frame(Completed = doc_size_c, 
+                            Not_Completed = doc_size_nc)
+
+kable(t(res_doc_size), booktabs=TRUE) %>% 
+  kable_styling(position = "center")
+```
+
+## The model
+
+As explained in the introduction, for completed checks duration is modeled using an exponential PDF. This is as straightforward as adding tfd_exponential() to the model function, tfd_joint_distribution_sequential(). 3 For the censored portion, we need the exponential CCDF. This one is not, as of today, easily added to the model. What we can do though is calculate its value ourselves and add it to the “main” model likelihood. We’ll see this below when discussing sampling; for now it means the model definition ends up straightforward as it only covers the non-censored data. It is made of just the said exponential PDF and priors for the regression parameters.  
+
+As for the latter, we use 0-centered, Gaussian priors for all parameters. Standard deviations of 1 turned out to work well. As the priors are all the same, instead of listing a bunch of tfd_normals, we can create them all at once as  
+
+```{r, results='hide'}
+library(keras)
+use_implementation("tensorflow")
+model <- function(data) {
+  tfd_joint_distribution_sequential(
+    list(
+      tfd_sample_distribution(tfd_normal(0, 1), sample_shape = 7),
+      function(betas)
+        tfd_independent(
+          tfd_exponential(
+            rate = 1 / tf$math$exp(tf$transpose(
+              tf$matmul(tf$cast(data, betas$dtype), tf$transpose(betas))))),
+          reinterpreted_batch_ndims = 1)))
+}
+m <- model(df_nc %>% as.matrix())
+```
+
+```{r}
+library(keras)
+use_implementation("tensorflow")
+model <- function(data) {
+  tfd_joint_distribution_sequential(
+    list(
+      tfd_sample_distribution(tfd_normal(0, 1), sample_shape = 7),
+      function(betas)
+        tfd_independent(
+          tfd_exponential(
+            rate = 1 / tf$math$exp(tf$transpose(
+              tf$matmul(tf$cast(data, betas$dtype), tf$transpose(betas))))),
+          reinterpreted_batch_ndims = 1)))
+}
+m <- model(df_nc %>% as.matrix())
+```
+
+
+Always, we test if samples from that model have the expected shapes:  
+
+```{r}
+samples <- m %>% tfd_sample(2)
+samples
+```
+
+This looks fine: We have a list of length two, one element for each distribution in the model. For both tensors, dimension 1 reflects the batch size (which we arbitrarily set to 2 in this test), while dimension 2 is 7 for the number of normal priors and 13523 for the number of durations predicted.
+
+How likely are these samples?
+
+```{r}
+m %>% tfd_log_prob(samples)
+```
+
+Here too, the shape is correct, and the values look reasonable.  
+
+The next thing to do is define the target we want to optimize.  
+
+## Optimization Target
+
+```{r}
+get_exponential_lccdf <- function(betas, data, target) {
+  e <-  tfd_independent(tfd_exponential(rate = 1 / tf$math$exp(tf$transpose(tf$matmul(
+    tf$cast(data, betas$dtype), tf$transpose(betas)
+  )))),
+  reinterpreted_batch_ndims = 1)
+  cum_prob <- e %>% tfd_cdf(tf$cast(target, betas$dtype))
+  tf$math$log(1 - cum_prob)
+}
+
+get_log_prob <-
+  function(target_nc,
+           censored_data = NULL,
+           target_c = NULL) {
+    log_prob <- function(betas) {
+      log_prob <-
+        m %>% tfd_log_prob(list(betas, tf$cast(target_nc, betas$dtype)))
+      potential <-
+        if (!is.null(censored_data) && !is.null(target_c))
+          get_exponential_lccdf(betas, censored_data, target_c)
+      else
+        0
+      log_prob + potential
+    }
+    log_prob
+  }
+
+log_prob <-
+  get_log_prob(
+    check_time_nc %>% tf$transpose(),
+    df_c %>% as.matrix(),
+    check_time_c %>% tf$transpose()
+  )
+```
+
+## Sampling
+
+```{r}
+n_chains <- 4
+n_burnin <- 1000
+n_steps <- 1000
+
+# keep track of some diagnostic output, acceptance and step size
+trace_fn <- function(state, pkr) {
+  list(
+    pkr$inner_results$is_accepted,
+    pkr$inner_results$accepted_results$step_size
+  )
+}
+
+# get shape of initial values 
+# to start sampling without producing NaNs, we will feed the algorithm
+# tf$zeros_like(initial_betas)
+# instead 
+initial_betas <- (m %>% tfd_sample(n_chains))[[1]]
+
+hmc <- mcmc_hamiltonian_monte_carlo(
+  target_log_prob_fn = log_prob,
+  num_leapfrog_steps = 64,
+  step_size = 0.1
+) %>%
+  mcmc_simple_step_size_adaptation(target_accept_prob = 0.8,
+                                   num_adaptation_steps = n_burnin)
+
+run_mcmc <- function(kernel) {
+  kernel %>% mcmc_sample_chain(
+    num_results = n_steps,
+    num_burnin_steps = n_burnin,
+    current_state = tf$ones_like(initial_betas),
+    trace_fn = trace_fn
+  )
+}
+
+# important for performance: run HMC in graph mode
+run_mcmc <- tf_function(run_mcmc)
+
+res <- hmc %>% run_mcmc()
+samples <- res$all_states
+```
+
+## Results
+
+```{r}
+accepted <- res$trace[[1]]
+as.numeric(accepted) %>% mean()
+
+step_size <- res$trace[[2]]
+as.numeric(step_size) %>% mean()
+
+effective_sample_size <- mcmc_effective_sample_size(samples) %>%
+  as.matrix() %>%
+  apply(2, mean)
+potential_scale_reduction <- mcmc_potential_scale_reduction(samples) %>%
+  as.numeric()
+
+# 2-item list, where each item has dim (1000, 4)
+samples <- as.array(samples) %>% array_branch(margin = 3)
+```
+
+How well did the sampling work? The chains mix well, but for some parameters, autocorrelation is still pretty high.  
+
+```{r}
+prep_tibble <- function(samples) {
+  as_tibble(samples,
+            .name_repair = ~ c("chain_1", "chain_2", "chain_3", "chain_4")) %>%
+    add_column(sample = 1:n_steps) %>%
+    gather(key = "chain", value = "value",-sample)
+}
+
+plot_trace <- function(samples) {
+  prep_tibble(samples) %>%
+    ggplot(aes(x = sample, y = value, color = chain)) +
+    geom_line() +
+    theme_light() +
+    theme(
+      legend.position = "none",
+      axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank()
+    )
+}
+
+plot_traces <- function(samples) {
+  plots <- purrr::map(samples, plot_trace)
+  do.call(grid.arrange, plots)
+}
+
+plot_traces(samples)
+```
+
+
+Now for a synopsis of posterior parameter statistics, including the usual per-parameter sampling indicators effective sample size and rhat.  
+
+```{r}
+all_samples <- map(samples, as.vector)
+
+means <- map_dbl(all_samples, mean)
+
+sds <- map_dbl(all_samples, sd)
+
+hpdis <- map(all_samples, ~ hdi(.x) %>% t() %>% as_tibble())
+
+summary <- tibble(
+  mean = means,
+  sd = sds,
+  hpdi = hpdis
+) %>% unnest() %>%
+  add_column(param = colnames(df_c), .after = FALSE) %>%
+  add_column(
+    n_effective = effective_sample_size,
+    rhat = potential_scale_reduction
+  )
+
+summary
+```
+
+To make sure they do, we inspect predictions from our model as well as from surv_reg. This time, we also split the data into training and test sets. Here first are the predictions from surv_reg:  
+
+```{r}
+train_test_split <- initial_split(check_times, strata = "status")
+check_time_train <- training(train_test_split)
+check_time_test <- testing(train_test_split)
+
+survreg_fit <-
+  surv_reg(dist = "exponential") %>% 
+  set_engine("survival") %>% 
+  fit(Surv(check_time, status) ~ depends + imports + doc_size + r_size + 
+        ns_import + ns_export, 
+      data = check_time_train)
+tidy(survreg_fit)
+
+survreg_pred <- 
+  predict(survreg_fit, check_time_test) %>% 
+  bind_cols(check_time_test %>% select(check_time, status))  
+
+ggplot(survreg_pred, aes(x = check_time, y = .pred, color = factor(status))) +
+  geom_point() + 
+  coord_cartesian(ylim = c(0, 1400))
+```
+
+For the MCMC model, we re-train on just the training set and obtain the parameter summary. The code is analogous to the above and not shown here.  
+
+We can now predict on the test set, for simplicity just using the posterior means:  
+
+```{r}
+df2 <- check_time_test %>% select(
+                    depends,
+                    imports,
+                    doc_size,
+                    r_size,
+                    ns_import,
+                    ns_export) %>%
+  add_column(intercept = rep(1, nrow(check_time_test)), .before = 1)
+
+mcmc_pred <- df2 %>% as.matrix() %*% summary$mean %>% exp() %>% as.numeric()
+mcmc_pred <- check_time_test %>% select(check_time, status) %>%
+  add_column(.pred = mcmc_pred)
+
+ggplot(mcmc_pred, aes(x = check_time, y = .pred, color = factor(status))) +
+  geom_point() + 
+  coord_cartesian(ylim = c(0, 1400))
+```
+
+
+# Question 2. 
+
+Make your own tweaks. For example, try different tuning parameter values and report what you found, or try a new data set, or apply the method to a new application.
+
+
