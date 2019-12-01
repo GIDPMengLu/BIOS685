@@ -1,0 +1,90 @@
+*Meng Lu*
+
+### Overall Grade: 107/110
+
+### Quality of report: 10/10
+
+-   Is the homework submitted (git tag time) before deadline (Due 11/1/2019 @ 11:59PM)? 
+
+    Yes. `2019-11-01 10:08:23 -0700`. (shown by `git log --tags --simplify-by-decoration --pretty="format:%ci %d"`)
+
+-   Is the final report in a human readable format html? 
+
+    Yes. `html`.
+
+-   Is the report prepared as a dynamic document (R markdown) for better reproducibility?
+
+    Yes. `Rmd` and deployed to shinapp.io.
+
+-   Is the report clear (whole sentences, typos, grammar)? Do readers have a clear idea what's going on and how are results produced by just reading the report? 
+
+	  Yes. However when you depolyed your html to web, it is better to be present only the information needed, e.g., figures, choice buttons, etc. If it is for teaching or for more advance students' tutorial, your is perfect. 
+	  
+### Correctness and efficiency of solution: 59/60
+
+-  On chunk `Visualize the Skills Set by Cities using Shiny Interactive App`, it would be better to have a defaul choice of city. Otherwise the figure shows as blank when first loaded. (-1pt) 
+  
+    
+### Usage of Git: 9/10
+
+-   Are branches (`master` and `develop`) correctly set up? Is the hw submission put into the `master` branch?
+
+    No. (-1pt) 
+    
+    - To merge develop branch to master:
+      
+      `git checkout master`
+      
+      `git pull . develop`
+     
+    - To tag the current status of whole project as hw1submission,
+     
+      `git tag hw1`
+      
+    - To push tags to remote
+    
+      `git push --tag` 
+
+-   Are there enough commits? Are commit messages clear?  (-1pt)
+
+    No. Commit messages are clear. But for HW2, only 1-2 commits?
+   
+-   Is the hw2 submission tagged? 
+
+    Yes. 
+
+-   Are the folders (`hw1`, `hw2`, ...) created correctly? 
+
+    Yes.
+  
+-   Do not put a lot auxiliary files into version control. 
+
+	  There is no auxiliary files in the folder. 
+
+
+### Reproducibility: 10/10
+
+-   Are the materials (files and instructions) submitted to the `master` branch sufficient for reproducing all the results? Just click the `knit` button will produce the final `html` on teaching server? 
+
+    Yes.     
+  	
+
+-   If necessary, are there clear instructions, either in report or in a separate file, how to reproduce the results?
+
+    Yes.
+
+### R code style: 19/20
+-   [Rule 3.](https://google.github.io/styleguide/Rguide.xml#linelength) The maximum line length is 80 characters. 
+
+
+-   [Rule 4.](https://google.github.io/styleguide/Rguide.xml#indentation) When indenting your code, use two spaces.
+
+-   [Rule 5.](https://google.github.io/styleguide/Rguide.xml#spacing) Place spaces around all binary operators (=, +, -, &lt;-, etc.). 
+
+    Not all binary operators were surronded by spaces. Be consistent within your code. (-1pt)
+
+-   [Rule 5.](https://google.github.io/styleguide/Rguide.xml#spacing) Do not place a space before a comma, but always place one after a comma. 
+
+
+
+
